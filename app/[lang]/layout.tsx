@@ -4,6 +4,7 @@ import Form from 'next/form';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
+import { Analytics } from '@vercel/analytics/next';
 import { CartProvider } from '@/components/cart-context';
 import { CartBadge, LangSwitch, LangSwitchFallback, MenuToggle, NavLinks, NavLinksPlain } from '@/components/client';
 import { Search } from '@/components/icons';
@@ -83,6 +84,7 @@ export default async function LangLayout({ children, params }: LayoutProps<'/[la
             </div>
           </footer>
         </CartProvider>
+        <Analytics />
       </body>
     </html>
   );
