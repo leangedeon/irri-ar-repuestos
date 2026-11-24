@@ -1,16 +1,21 @@
 import Form from 'next/form';
 import { notFound } from 'next/navigation';
 import { Search } from '@/components/icons';
+import { Suspense } from 'react';
+import { PivotViewer } from '@/components/pivot-viewer';
 import { Tile } from '@/components/ui';
-import { db, roots } from '@/lib/catalog';
+import { roots, visibleCategories, visibleProducts } from '@/lib/catalog';
 import { fmt, getDict, hasLocale } from '@/lib/i18n';
+import { withSettings } from '@/lib/settings';
 
 export default async function Home({ params }: PageProps<'/[lang]'>) {
+  await withSettings();
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   const t = getDict(lang);
-  const { prods, cats } = db();
-  const kits = [...prods.values()].filter((p) => p.bom.length).length;
+  const prods = visibleProducts();
+  const cats = visibleCategories();
+  const kits = prods.filter((p) => p.bom.length).length;
 
   return (
     <div className="page">
@@ -26,21 +31,24 @@ export default async function Home({ params }: PageProps<'/[lang]'>) {
               {t.header.searchBtn}
             </button>
           </Form>
+          <dl className="hero-stats">
+            <div>
+              <dt>{t.home.products}</dt>
+              <dd>{fmt(lang, prods.length)}</dd>
+            </div>
+            <div>
+              <dt>{t.home.kits}</dt>
+              <dd>{fmt(lang, kits)}</dd>
+            </div>
+            <div>
+              <dt>{t.home.categories}</dt>
+              <dd>{fmt(lang, cats.length)}</dd>
+            </div>
+          </dl>
         </div>
-        <dl className="hero-stats">
-          <div>
-            <dt>{t.home.products}</dt>
-            <dd>{fmt(lang, prods.size)}</dd>
-          </div>
-          <div>
-            <dt>{t.home.kits}</dt>
-            <dd>{fmt(lang, kits)}</dd>
-          </div>
-          <div>
-            <dt>{t.home.categories}</dt>
-            <dd>{fmt(lang, cats.length)}</dd>
-          </div>
-        </dl>
+        <Suspense>
+          <PivotViewer lang={lang} mode="link" big />
+        </Suspense>
       </section>
       <section className="block">
         <h2 className="block-title">{t.home.categories}</h2>

@@ -2,6 +2,8 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Locale } from './i18n';
+import { getSettings, settingsVersion } from './settings';
+import { zoneOfCategory, zoneOfName, type Zone } from './zones';
 
 // Catálogo Lindsay generado por scripts/build_catalog.py (data/tienda/catalog.json).
 
@@ -19,8 +21,13 @@ export type Category = {
   img: string;
   kids: number[];
   parts: string[];
+  /** Productos únicos visibles (0 si la categoría está oculta en los ajustes). */
   total: number;
+  /** Productos únicos sin tener en cuenta los ajustes. */
+  size: number;
   cover: string;
+  /** Zona del pivot (visor 3D) o null si no tiene vista previa. */
+  zone: Zone | null;
 };
 
 export type BomLine = { part: string; qty: number | null; ref: number | string };
@@ -44,12 +51,75 @@ type Db = {
   prods: Map<string, Product>;
   usedIn: Map<string, string[]>;
   catsOf: Map<string, number[]>;
+  /** Productos únicos bajo cada categoría (sin ajustes). */
+  under: Set<string>[];
+  zonesOf: Map<string, Zone[]>;
 };
+
+// ---------- ajustes: categorías visibles ----------
+
+// Se guardan las categorías ocultas por su ruta de nombres originales ("Aftermarket Parts › Electrical"),
+// así siguen valiendo aunque se regenere el catálogo y cambien los números.
+type View = { hidden: Uint8Array; visible: Set<string> | null; version: number };
+let view: View | null = null;
+
+export const catKey = (id: number) =>
+  trail(id)
+    .map((c) => c.name)
+    .join(' › ');
+
+function applySettings(d: Db) {
+  const version = settingsVersion();
+  if (view && view.version === version) return;
+  const off = new Set(getSettings().ocultas);
+  const hidden = new Uint8Array(d.cats.length);
+  const mark = (c: Category, parentHidden: boolean, prefix: string) => {
+    const key = prefix ? `${prefix} › ${c.name}` : c.name;
+    const h = parentHidden || off.has(key);
+    hidden[c.id] = h ? 1 : 0;
+    for (const k of c.kids) mark(d.cats[k], h, key);
+  };
+  d.roots.forEach((r) => mark(d.cats[r], false, ''));
+
+  let visible: Set<string> | null = null;
+  if (off.size) {
+    visible = new Set();
+    const add = (part: string) => {
+      if (visible!.has(part)) return;
+      visible!.add(part);
+      for (const b of d.prods.get(part)?.bom ?? []) add(b.part);
+    };
+    for (const c of d.cats) if (!hidden[c.id]) c.parts.forEach(add);
+  }
+
+  // Totales y portadas según lo visible.
+  const count = (c: Category): Set<string> => {
+    if (hidden[c.id]) {
+      c.total = 0;
+      for (const k of c.kids) count(d.cats[k]);
+      return new Set();
+    }
+    const set = new Set(c.parts);
+    for (const k of c.kids) for (const p of count(d.cats[k])) set.add(p);
+    c.total = set.size;
+    c.cover = '';
+    if (!c.img) {
+      const kid = c.kids.map((k) => d.cats[k]).find((k) => k.total && (k.img || k.cover));
+      c.cover = kid ? kid.img || kid.cover : ([...set].map((p) => d.prods.get(p)?.img).find(Boolean) ?? '');
+    }
+    return set;
+  };
+  d.roots.forEach((r) => count(d.cats[r]));
+  view = { hidden, visible, version };
+}
 
 let cache: Db | null = null;
 
 function load(): Db {
-  if (cache) return cache;
+  if (cache) {
+    applySettings(cache);
+    return cache;
+  }
   const file = path.join(process.cwd(), 'data', 'tienda', 'catalog.json');
   const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as { roots: number[]; cats: RawCat[]; prods: Record<string, RawProd> };
 
@@ -87,7 +157,9 @@ function load(): Db {
     kids,
     parts,
     total: 0,
+    size: 0,
     cover: '',
+    zone: null,
   }));
   const catsOf = new Map<string, number[]>();
   for (const c of cats)
@@ -97,37 +169,123 @@ function load(): Db {
       catsOf.set(part, list);
     }
 
-  // Productos únicos bajo cada categoría y una imagen de respaldo.
-  const all = new Map<number, Set<string>>();
+  // Productos únicos bajo cada categoría (sin ajustes).
+  const under: Set<string>[] = [];
   const count = (c: Category): Set<string> => {
-    const done = all.get(c.id);
-    if (done) return done;
+    if (under[c.id]) return under[c.id];
     const set = new Set(c.parts);
     for (const k of c.kids) for (const p of count(cats[k])) set.add(p);
-    all.set(c.id, set);
-    c.total = set.size;
-    if (!c.img) {
-      const kid = c.kids.map((k) => cats[k]).find((k) => k.total && (k.img || k.cover));
-      c.cover = kid ? kid.img || kid.cover : ([...set].map((p) => prods.get(p)?.img).find(Boolean) ?? '');
-    }
+    under[c.id] = set;
+    c.size = set.size;
     return set;
   };
   raw.roots.forEach((r) => count(cats[r]));
 
-  cache = { cats, roots: raw.roots, prods, usedIn, catsOf };
+  // Zonas del pivot: por categoría (heredando de la madre) y luego por producto.
+  const zoneOf = (c: Category, inherited: Zone | null) => {
+    const own = zoneOfCategory(c.name);
+    c.zone = own === undefined ? inherited : own;
+    for (const k of c.kids) zoneOf(cats[k], c.zone);
+  };
+  raw.roots.forEach((r) => zoneOf(cats[r], null));
+  const zonesOf = new Map<string, Zone[]>();
+  for (const p of prods.values()) {
+    const byName = zoneOfName(p.name);
+    const fromCats = [...new Set((catsOf.get(p.part) ?? []).map((id) => cats[id].zone).filter((z): z is Zone => !!z))];
+    // El nombre manda cuando la categoría es genérica (bulonería, blísters…) o es más específico que una de varias.
+    const list = byName && (!fromCats.length || fromCats.includes(byName)) ? [byName] : fromCats.length ? fromCats : byName ? [byName] : [];
+    if (list.length) zonesOf.set(p.part, list);
+  }
+  // Piezas sin zona propia: toman la del conjunto que las usa.
+  for (const p of prods.values()) {
+    if (zonesOf.has(p.part)) continue;
+    const fromKits = [...new Set((usedIn.get(p.part) ?? []).flatMap((k) => zonesOf.get(k) ?? []))];
+    if (fromKits.length && fromKits.length <= 2) zonesOf.set(p.part, fromKits);
+  }
+
+  cache = { cats, roots: raw.roots, prods, usedIn, catsOf, under, zonesOf };
+  applySettings(cache);
   return cache;
 }
 
 export const db = () => load();
-export const getProduct = (part: string) => load().prods.get(part);
-export const getCategory = (id: number) => (Number.isInteger(id) ? load().cats[id] : undefined);
-export const roots = () => load().roots.map((id) => load().cats[id]);
-export const usedIn = (part: string) => (load().usedIn.get(part) ?? []).map((p) => load().prods.get(p)!).filter(Boolean);
-export const catsOf = (part: string) => load().catsOf.get(part) ?? [];
+
+const isVisible = (part: string) => {
+  load();
+  return !view?.visible || view.visible.has(part);
+};
+const catVisible = (id: number) => {
+  load();
+  return !view?.hidden[id];
+};
+
+/** Producto visible según los ajustes (los ocultos no se muestran en la tienda). */
+export const getProduct = (part: string) => {
+  const p = load().prods.get(part);
+  return p && isVisible(part) ? p : undefined;
+};
+export const getCategory = (id: number) => (Number.isInteger(id) && catVisible(id) ? load().cats[id] : undefined);
+export const roots = () => load().roots.map((id) => load().cats[id]).filter((c) => c.total);
+export const usedIn = (part: string) => (load().usedIn.get(part) ?? []).map((p) => getProduct(p)!).filter(Boolean);
+export const catsOf = (part: string) => (load().catsOf.get(part) ?? []).filter(catVisible);
+export const visibleProducts = () => [...load().prods.values()].filter((p) => isVisible(p.part));
+export const visibleCategories = () => load().cats.filter((c) => c.total);
+
+// ---------- zonas del pivot ----------
+
+export const zonesOf = (part: string): Zone[] => load().zonesOf.get(part) ?? [];
+
+/** Zonas de una categoría: la suya o, si es una categoría amplia, las de sus productos más comunes. */
+export function zonesOfCategory(id: number): Zone[] {
+  const d = load();
+  const c = d.cats[id];
+  if (!c) return [];
+  if (c.zone) return [c.zone];
+  const tally = new Map<Zone, number>();
+  for (const p of d.under[id]) for (const z of d.zonesOf.get(p) ?? []) tally.set(z, (tally.get(z) ?? 0) + 1);
+  const total = d.under[id].size || 1;
+  return [...tally.entries()]
+    .filter(([, n]) => n / total >= 0.15)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([z]) => z);
+}
+
+/** Cuántos productos de la lista hay en cada zona. */
+export function zoneCounts(parts: string[]): Partial<Record<Zone, number>> {
+  const out: Partial<Record<Zone, number>> = {};
+  for (const p of parts) for (const z of zonesOf(p)) out[z] = (out[z] ?? 0) + 1;
+  return out;
+}
+
+/** Categorías visibles con más productos de una zona (para sugerir dónde seguir buscando). */
+export function categoriesOfZone(zone: Zone, limit = 8): Category[] {
+  const d = load();
+  return d.cats
+    .filter((c) => c.total && c.parts.length && c.zone === zone)
+    .sort((a, b) => b.parts.length - a.parts.length)
+    .slice(0, limit);
+}
+
+/** Productos visibles de una zona, en orden de catálogo. */
+export function partsOfZone(zone: Zone): string[] {
+  const d = load();
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (part: string) => {
+    if (seen.has(part)) return;
+    seen.add(part);
+    if ((d.zonesOf.get(part) ?? []).includes(zone) && isVisible(part)) out.push(part);
+  };
+  // Primero los que están en categorías (más relevantes), después las piezas sueltas de conjuntos.
+  for (const c of d.cats) if (!view?.hidden[c.id]) c.parts.forEach(add);
+  for (const part of d.zonesOf.keys()) add(part);
+  return out;
+}
 
 export function trail(id: number): Category[] {
   const out: Category[] = [];
-  const { cats } = load();
+  const { cats } = cache ?? load();
   for (let c = cats[id]; c; c = cats[c.parent]) out.unshift(c);
   return out;
 }
@@ -148,7 +306,7 @@ export function search(q: string): Product[] {
   const { prods, catsOf: co } = load();
   const out: [number, Product][] = [];
   for (const p of prods.values()) {
-    if (terms.every((t) => p.search.includes(t))) {
+    if (terms.every((t) => p.search.includes(t)) && isVisible(p.part)) {
       const score = p.part === exact ? 0 : p.part.startsWith(exact) ? 1 : co.has(p.part) ? 2 : 3;
       out.push([score, p]);
     }

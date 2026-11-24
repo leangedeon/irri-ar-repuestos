@@ -5,10 +5,14 @@ import { BomTable } from '@/components/bom-table';
 import { CopyCode, Img, JumpButton } from '@/components/client';
 import { Info, Layers } from '@/components/icons';
 import { CatCrumbs, catHref, Chips, Crumbs, NotFoundBox, OrderControl, prodHref, ProductRow } from '@/components/ui';
-import { bomTree, catName, catsOf, getCategory, getProduct, imgSrc, isKit, prodName, STATUS, trail, usedIn } from '@/lib/catalog';
+import { Suspense } from 'react';
+import { PivotViewer } from '@/components/pivot-viewer';
+import { bomTree, catName, catsOf, getCategory, getProduct, imgSrc, isKit, prodName, STATUS, trail, usedIn, zonesOf } from '@/lib/catalog';
 import { fmt, getDict, hasLocale, weightLabel } from '@/lib/i18n';
+import { withSettings } from '@/lib/settings';
 
 export async function generateMetadata({ params }: PageProps<'/[lang]/p/[part]'>): Promise<Metadata> {
+  await withSettings();
   const { lang, part } = await params;
   const p = getProduct(decodeURIComponent(part));
   if (!hasLocale(lang) || !p) return {};
@@ -16,6 +20,7 @@ export async function generateMetadata({ params }: PageProps<'/[lang]/p/[part]'>
 }
 
 export default async function ProductPage({ params, searchParams }: PageProps<'/[lang]/p/[part]'>) {
+  await withSettings();
   const { lang, part: rawPart } = await params;
   if (!hasLocale(lang)) notFound();
   const t = getDict(lang);
@@ -110,6 +115,9 @@ export default async function ProductPage({ params, searchParams }: PageProps<'/
               )}
             </>
           )}
+          <Suspense>
+            <PivotViewer lang={lang} mode="link" active={zonesOf(p.part)} subject={p.part} />
+          </Suspense>
         </div>
       </article>
 

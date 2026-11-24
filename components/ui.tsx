@@ -11,12 +11,14 @@ import {
   prodName,
   STATUS,
   trail,
+  zonesOf,
   type Category,
   type Product,
 } from '@/lib/catalog';
 import { fmt, getDict, weightLabel, type Locale } from '@/lib/i18n';
+import { isZone, ZONE_LABEL } from '@/lib/zones';
 import { AddToCart, Img } from './client';
-import { Back, Chev, Grid, Layers, Rows, Search } from './icons';
+import { Back, Chev, Close, Grid, Layers, Pin, Rows, Search } from './icons';
 import { ParamSelect } from './param-select';
 
 export const catHref = (lang: Locale, id: number) => `/${lang}/c/${id}`;
@@ -180,8 +182,11 @@ export function Listing({ lang, parts, params, base, fromCat }: { lang: Locale; 
   const size = [24, 48, 96].includes(Number(one(params.ver))) ? Number(one(params.ver)) : 24;
   const filter = one(params.filtro).trim();
   const layout = one(params.vista) === 'grilla' ? 'grilla' : 'lista';
+  const zona = one(params.zona);
+  const zone = isZone(zona) ? zona : null;
 
   let list = parts.map(getProduct).filter((p): p is Product => !!p);
+  if (zone) list = list.filter((p) => zonesOf(p.part).includes(zone));
   if (filter) {
     const terms = filter.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/\s+/);
     list = list.filter((p) => terms.every((x) => p.search.includes(x)));
@@ -219,6 +224,13 @@ export function Listing({ lang, parts, params, base, fromCat }: { lang: Locale; 
               (filter ? t.for(filter.replace(/[<>&"]/g, '')) : ''),
           }}
         />
+        {zone && (
+          <Link className="zone-chip" href={link({ zona: null, pag: null })} scroll={false} aria-label={`${t.zoneClear}: ${ZONE_LABEL[lang][zone]}`}>
+            <Pin />
+            {ZONE_LABEL[lang][zone]}
+            <Close />
+          </Link>
+        )}
         <Form action={base} className="list-filter" scroll={false}>
           <Search />
           {hidden.map(([k, v]) => (

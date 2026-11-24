@@ -7,10 +7,11 @@ import { Suspense } from 'react';
 import { Analytics } from '@vercel/analytics/next';
 import { CartProvider } from '@/components/cart-context';
 import { CartBadge, LangSwitch, LangSwitchFallback, MenuToggle, NavLinks, NavLinksPlain } from '@/components/client';
-import { Search } from '@/components/icons';
+import { Gear, Search } from '@/components/icons';
 import { catName, db, roots, trail } from '@/lib/catalog';
 import { getDict, hasLocale, LOCALES } from '@/lib/i18n';
 import '../globals.css';
+import { withSettings } from '@/lib/settings';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist' });
 const geistMono = Geist_Mono({ subsets: ['latin'], weight: ['500'], variable: '--font-geist-mono' });
@@ -39,6 +40,7 @@ export async function generateMetadata({ params }: LayoutProps<'/[lang]'>): Prom
 }
 
 export default async function LangLayout({ children, params }: LayoutProps<'/[lang]'>) {
+  await withSettings();
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   const t = getDict(lang);
@@ -65,6 +67,9 @@ export default async function LangLayout({ children, params }: LayoutProps<'/[la
                 <Suspense fallback={<LangSwitchFallback lang={lang} />}>
                   <LangSwitch lang={lang} />
                 </Suspense>
+                <Link className="hd-cart hd-settings" href={`/${lang}/ajustes`} aria-label={t.header.settings} title={t.header.settings}>
+                  <Gear />
+                </Link>
                 <CartBadge lang={lang} />
               </div>
             </div>

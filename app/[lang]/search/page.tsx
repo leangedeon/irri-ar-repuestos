@@ -3,8 +3,12 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { Search } from '@/components/icons';
 import { catHref, Crumbs, Listing, prodHref } from '@/components/ui';
-import { catName, getProduct, search, searchCats, trail } from '@/lib/catalog';
+import { Suspense } from 'react';
+import { PivotViewer } from '@/components/pivot-viewer';
+import { catName, getProduct, search, searchCats, trail, zoneCounts } from '@/lib/catalog';
+import { isZone } from '@/lib/zones';
 import { fmt, getDict, hasLocale } from '@/lib/i18n';
+import { withSettings } from '@/lib/settings';
 
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
 
@@ -15,6 +19,7 @@ export async function generateMetadata({ params, searchParams }: PageProps<'/[la
 }
 
 export default async function SearchPage({ params, searchParams }: PageProps<'/[lang]/search'>) {
+  await withSettings();
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   const t = getDict(lang);
@@ -28,16 +33,24 @@ export default async function SearchPage({ params, searchParams }: PageProps<'/[
 
   const results = search(q);
   const cats = searchCats(q);
+  const zona = one(sp.zona);
 
   return (
     <div className="page">
       <Crumbs lang={lang} items={[{ label: t.search.crumb }]} />
-      <header className="page-head">
-        <h1>{t.search.title(q)}</h1>
-        <p className="muted">
-          {fmt(lang, results.length)} {t.common.product(results.length)}
-        </p>
-      </header>
+      <div className="head-row">
+        <header className="page-head">
+          <h1>{t.search.title(q)}</h1>
+          <p className="muted">
+            {fmt(lang, results.length)} {t.common.product(results.length)}
+          </p>
+        </header>
+        {results.length > 0 && (
+          <Suspense>
+            <PivotViewer lang={lang} mode="filter" counts={zoneCounts(results.map((p) => p.part))} selected={isZone(zona) ? zona : null} />
+          </Suspense>
+        )}
+      </div>
       {cats.length > 0 && (
         <section className="block">
           <h2 className="block-title">{t.search.categories}</h2>

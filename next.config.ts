@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   cacheComponents: false,
   // El catálogo se lee del disco en el servidor; hay que incluirlo en el despliegue.
   outputFileTracingIncludes: {
-    '/**': ['./data/tienda/catalog.json'],
+    '/**': ['./data/tienda/catalog.json', './data/tienda/ajustes.json'],
   },
 };
 
