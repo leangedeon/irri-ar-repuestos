@@ -14,7 +14,27 @@ export type Settings = { ocultas: string[] };
 
 export const SETTINGS_FILE = path.join(process.cwd(), 'data', 'tienda', 'ajustes.json');
 const BLOB_PATH = 'ajustes/ajustes.json';
-const blobEnabled = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+// Token del store. Vercel lo crea como BLOB_READ_WRITE_TOKEN, o con otro prefijo si se eligió uno al conectar el store.
+const blobToken = () =>
+  process.env.BLOB_READ_WRITE_TOKEN ||
+  Object.entries(process.env).find(([k, v]) => k.endsWith('_READ_WRITE_TOKEN') && v?.startsWith('vercel_blob_'))?.[1] ||
+  '';
+const blobEnabled = () => !!blobToken();
+
+// El store puede haberse creado privado o público: se prueba uno y, si Blob lo rechaza, el otro.
+type Access = 'private' | 'public';
+let accessFirst: Access = 'private';
+async function withAccess<T>(fn: (access: Access) => Promise<T>): Promise<T> {
+  try {
+    return await fn(accessFirst);
+  } catch (e) {
+    const other: Access = accessFirst === 'private' ? 'public' : 'private';
+    if (!/access|public|private/i.test(String((e as Error)?.message))) throw e;
+    const res = await fn(other);
+    accessFirst = other;
+    return res;
+  }
+}
 
 const clean = (raw: unknown): Settings => {
   const list = (raw as Partial<Settings> | null)?.ocultas;
@@ -43,7 +63,7 @@ export const SETTINGS_TAG = 'ajustes';
 // Así no se gastan operaciones de Blob en cada visita.
 const readBlob = unstable_cache(
   async () => {
-    const res = await get(BLOB_PATH, { access: 'private', useCache: false });
+    const res = await withAccess((access) => get(BLOB_PATH, { access, useCache: false, token: blobToken() }));
     if (!res || res.statusCode !== 200) return null;
     return { data: clean(await new Response(res.stream).json()), etag: res.blob.etag };
   },
@@ -91,17 +111,22 @@ export async function refreshSettings(force = false) {
   }
 }
 
-export async function writeSettings(next: Settings): Promise<boolean> {
+export type WriteResult = { ok: true } | { ok: false; reason: string };
+
+export async function writeSettings(next: Settings): Promise<WriteResult> {
   const body = `${JSON.stringify(next, null, 2)}\n`;
   try {
     if (blobEnabled()) {
-      await put(BLOB_PATH, body, {
-        access: 'private',
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        contentType: 'application/json',
-        cacheControlMaxAge: 60,
-      });
+      await withAccess((access) =>
+        put(BLOB_PATH, body, {
+          access,
+          token: blobToken(),
+          addRandomSuffix: false,
+          allowOverwrite: true,
+          contentType: 'application/json',
+          cacheControlMaxAge: 60,
+        })
+      );
       etag = '';
       set(next, `saved:${Date.now()}`);
     } else {
@@ -109,10 +134,14 @@ export async function writeSettings(next: Settings): Promise<boolean> {
       set(next, `file:${mtimeOf()}`);
     }
     checkedAt = Date.now();
-    return true;
+    return { ok: true };
   } catch (e) {
     console.error('No se pudieron guardar los ajustes', e);
-    return false;
+    const msg = String((e as Error)?.message ?? e).slice(0, 300);
+    // Sin store de Blob en Vercel, el disco es de solo lectura.
+    if (!blobEnabled() && /EROFS|read-only|EACCES|EPERM/i.test(msg))
+      return { ok: false, reason: 'No hay un store de Vercel Blob conectado a este deploy (falta BLOB_READ_WRITE_TOKEN).' };
+    return { ok: false, reason: `${blobEnabled() ? 'Vercel Blob' : 'Archivo'}: ${msg}` };
   }
 }
 

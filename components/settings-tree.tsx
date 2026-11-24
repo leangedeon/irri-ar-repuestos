@@ -43,6 +43,7 @@ export function SettingsTree({ lang, nodes, roots, hidden, save }: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set());
   const [q, setQ] = useState('');
   const [pending, start] = useTransition();
+  const [failure, setFailure] = useState('');
 
   // Estado de cada nodo para la casilla: todo visible, parcial o nada.
   const mixed = useMemo(() => {
@@ -103,11 +104,20 @@ export function SettingsTree({ lang, nodes, roots, hidden, save }: Props) {
 
   const onSave = () =>
     start(async () => {
-      const res = await save(hiddenKeys(on));
+      let res: SaveResult;
+      try {
+        res = await save(hiddenKeys(on));
+      } catch (e) {
+        res = { ok: false, reason: String((e as Error)?.message ?? e) };
+      }
       if (res.ok) {
         setSaved(on);
+        setFailure('');
         toast(t.saved);
-      } else toast(t.error);
+      } else {
+        setFailure(res.reason ?? '');
+        toast(t.error);
+      }
     });
 
   const row = (i: number, depth: number): React.ReactNode => {
@@ -190,6 +200,11 @@ export function SettingsTree({ lang, nodes, roots, hidden, save }: Props) {
         <p>
           <b>{t.visible(fmt(lang, visibleCount), fmt(lang, nodes.length))}</b>
           <span>{changes ? t.changes(changes) : t.noChanges}</span>
+          {failure && (
+            <span className="st-err" role="alert">
+              {t.error} {failure}
+            </span>
+          )}
         </p>
         <button className="btn btn-ghost" disabled={!changes || pending} onClick={() => setOn(saved)}>
           {t.discard}

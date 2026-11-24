@@ -4,7 +4,7 @@ import { revalidatePath, updateTag } from 'next/cache';
 import { db } from '@/lib/catalog';
 import { SETTINGS_TAG, writeSettings } from '@/lib/settings';
 
-export type SaveResult = { ok: true; hidden: number } | { ok: false };
+export type SaveResult = { ok: true; hidden: number } | { ok: false; reason?: string };
 
 // Guarda las categorías ocultas (Vercel Blob en producción, archivo en la copia local).
 // Por ahora cualquiera puede guardar; cuando haya login con roles, verificar acá el permiso.
@@ -20,7 +20,8 @@ export async function saveSettings(ocultas: string[]): Promise<SaveResult> {
   };
   roots.forEach((r) => walk(r, ''));
   const list = [...new Set(ocultas.filter((k) => typeof k === 'string' && valid.has(k)))].sort();
-  if (!(await writeSettings({ ocultas: list }))) return { ok: false };
+  const res = await writeSettings({ ocultas: list });
+  if (!res.ok) return { ok: false, reason: res.reason };
   updateTag(SETTINGS_TAG);
   revalidatePath('/', 'layout');
   return { ok: true, hidden: list.length };

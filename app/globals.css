@@ -2227,3 +2227,7 @@ button.st-exp:hover {
   width: 20px;
   height: 20px;
 }
+.st-bar p .st-err {
+  color: var(--primary);
+  font-weight: 500;
+}
